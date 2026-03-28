@@ -1,15 +1,20 @@
 use iced::advanced::renderer;
-use iced::{Point, Rectangle, Color};
+use iced::advanced::text;
+use iced::{Color, Point, Rectangle, Size};
 
+use crate::fonts::HANDLE_FONT;
 use crate::lattiton::state::{Axis, CollapseState, SplitId};
 use crate::lattiton::style::HandleStyle;
 
-const DOT_RADIUS: f32 = 1.5;
-const DOT_SPACING_ALONG: f32 = 5.0;
-const DOT_SPACING_ACROSS: f32 = 4.0;
-const ARROW_SIZE: f32 = 5.0;
-const ARROW_MARGIN: f32 = 6.0;
-const COLLAPSED_STRIP_THICKNESS: f32 = 4.0;
+const DOT_TOP_RADIUS: f32 = 1.5;
+const DOT_BOTTOM_RADIUS: f32 = 3.0;
+const DOT_SPACING: f32 = 5.0;
+const ARROW_FONT_SIZE: f32 = 14.0;
+const ARROW_ZONE_SIZE: f32 = 16.0;
+const ARROW_GAP: f32 = -8.0;
+const DOT_GROUP_OFFSET: f32 = 16.0;
+const COLLAPSED_STRIP_THICKNESS: f32 = 6.0;
+pub const STRIP_THICKNESS: f32 = 7.0;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HandleAction {
@@ -29,12 +34,7 @@ pub struct HandleZone {
 }
 
 impl HandleZone {
-	pub fn new(
-		split_id: SplitId,
-		bounds: Rectangle,
-		axis: Axis,
-		collapse: CollapseState,
-	) -> Self {
+	pub fn new(split_id: SplitId, bounds: Rectangle, axis: Axis, collapse: CollapseState) -> Self {
 		let (first_arrow, second_arrow) = arrow_zones(bounds, axis);
 		Self {
 			split_id,
@@ -68,35 +68,40 @@ impl HandleZone {
 }
 
 fn arrow_zones(bounds: Rectangle, axis: Axis) -> (Rectangle, Rectangle) {
-	let arrow_size = ARROW_SIZE * 3.0;
+	let cx = bounds.x + bounds.width / 2.0;
+	let cy = bounds.y + bounds.height / 2.0;
+	let half_gap = ARROW_GAP / 2.0;
+
 	match axis {
 		Axis::Horizontal => {
+			// Vertical handle bar — both arrows centered vertically, gap between
 			let first = Rectangle {
-				x: bounds.x + ARROW_MARGIN,
-				y: bounds.y + (bounds.height - arrow_size) / 2.0,
-				width: arrow_size,
-				height: arrow_size,
+				x: bounds.x,
+				y: cy - half_gap - ARROW_ZONE_SIZE,
+				width: bounds.width,
+				height: ARROW_ZONE_SIZE,
 			};
 			let second = Rectangle {
-				x: bounds.x + bounds.width - ARROW_MARGIN - arrow_size,
-				y: bounds.y + (bounds.height - arrow_size) / 2.0,
-				width: arrow_size,
-				height: arrow_size,
+				x: bounds.x,
+				y: cy + half_gap,
+				width: bounds.width,
+				height: ARROW_ZONE_SIZE,
 			};
 			(first, second)
 		}
 		Axis::Vertical => {
+			// Horizontal handle bar — both arrows centered horizontally, gap between
 			let first = Rectangle {
-				x: bounds.x + (bounds.width - arrow_size) / 2.0,
-				y: bounds.y + ARROW_MARGIN,
-				width: arrow_size,
-				height: arrow_size,
+				x: cx - half_gap - ARROW_ZONE_SIZE,
+				y: bounds.y,
+				width: ARROW_ZONE_SIZE,
+				height: bounds.height,
 			};
 			let second = Rectangle {
-				x: bounds.x + (bounds.width - arrow_size) / 2.0,
-				y: bounds.y + bounds.height - ARROW_MARGIN - arrow_size,
-				width: arrow_size,
-				height: arrow_size,
+				x: cx + half_gap,
+				y: bounds.y,
+				width: ARROW_ZONE_SIZE,
+				height: bounds.height,
 			};
 			(first, second)
 		}
@@ -109,7 +114,7 @@ pub fn draw_handle<Renderer>(
 	style: &HandleStyle,
 	hovered_arrow: Option<bool>,
 ) where
-	Renderer: renderer::Renderer,
+	Renderer: renderer::Renderer + text::Renderer<Font = iced::Font>,
 {
 	let bounds = zone.bounds;
 
@@ -127,10 +132,10 @@ pub fn draw_handle<Renderer>(
 		style.background,
 	);
 
-	// 3x2 dots in the center
-	draw_dots(renderer, bounds, zone.axis, style.dot_color);
+	// Dual-layer dots: bottom (glow) then top (bright)
+	draw_dots(renderer, bounds, zone.axis, style);
 
-	// Collapse/expand arrows
+	// Unicode arrow glyphs
 	let first_color = if hovered_arrow == Some(true) {
 		style.arrow_hover_color
 	} else {
@@ -142,219 +147,134 @@ pub fn draw_handle<Renderer>(
 		style.arrow_color
 	};
 
-	draw_arrow(
-		renderer,
-		zone.first_arrow,
-		zone.axis,
-		zone.collapse,
-		true,
-		first_color,
-	);
-	draw_arrow(
-		renderer,
-		zone.second_arrow,
-		zone.axis,
-		zone.collapse,
-		false,
-		second_color,
+	let (first_glyph, second_glyph) = arrow_glyphs(zone.axis, zone.collapse);
+
+	draw_arrow_text(renderer, zone.first_arrow, first_glyph, first_color, ARROW_FONT_SIZE);
+	draw_arrow_text(renderer, zone.second_arrow, second_glyph, second_color, ARROW_FONT_SIZE);
+}
+
+/// Pick unicode arrow characters based on axis and collapse state.
+fn arrow_glyphs(axis: Axis, collapse: CollapseState) -> (&'static str, &'static str) {
+	match axis {
+		Axis::Horizontal => {
+			// Vertical handle — first arrow collapses left, second collapses right
+			let first = match collapse {
+				CollapseState::FirstCollapsed => "▶", // expand: point right (away from edge)
+				_ => "◀",                             // collapse: point left (toward first)
+			};
+			let second = match collapse {
+				CollapseState::SecondCollapsed => "◀", // expand: point left (away from edge)
+				_ => "▶",                              // collapse: point right (toward second)
+			};
+			(first, second)
+		}
+		Axis::Vertical => {
+			// Horizontal handle — first arrow collapses up, second collapses down
+			let first = match collapse {
+				CollapseState::FirstCollapsed => "▼", // expand: point down (away from edge)
+				_ => "▲",                             // collapse: point up (toward first)
+			};
+			let second = match collapse {
+				CollapseState::SecondCollapsed => "▲", // expand: point up (away from edge)
+				_ => "▼",                              // collapse: point down (toward second)
+			};
+			(first, second)
+		}
+	}
+}
+
+fn draw_arrow_text<Renderer>(
+	renderer: &mut Renderer,
+	zone: Rectangle,
+	glyph: &str,
+	color: Color,
+	font_size: f32,
+) where
+	Renderer: renderer::Renderer + text::Renderer<Font = iced::Font>,
+{
+	renderer.fill_text(
+		text::Text {
+			content: glyph.to_owned(),
+			bounds: Size::new(zone.width, zone.height),
+			size: font_size.into(),
+			line_height: text::LineHeight::default(),
+			font: HANDLE_FONT,
+			align_x: text::Alignment::Center,
+			align_y: iced::alignment::Vertical::Center,
+			shaping: text::Shaping::Basic,
+			wrapping: text::Wrapping::None,
+		},
+		Point::new(zone.center_x(), zone.center_y()),
+		color,
+		zone,
 	);
 }
 
-fn draw_dots<Renderer>(
-	renderer: &mut Renderer,
-	bounds: Rectangle,
-	axis: Axis,
-	color: Color,
-) where
+fn draw_dots<Renderer>(renderer: &mut Renderer, bounds: Rectangle, axis: Axis, style: &HandleStyle)
+where
 	Renderer: renderer::Renderer,
 {
 	let cx = bounds.x + bounds.width / 2.0;
 	let cy = bounds.y + bounds.height / 2.0;
 
-	// 3 dots along the axis, 2 dots across
-	let along_offsets: [f32; 3] = [-DOT_SPACING_ALONG, 0.0, DOT_SPACING_ALONG];
-	let across_offsets: [f32; 2] = [-DOT_SPACING_ACROSS / 2.0, DOT_SPACING_ACROSS / 2.0];
+	// 3 dots on each side of the center arrows, colinear along the handle
+	let dot_offsets: [f32; 3] = [0.0, DOT_SPACING, DOT_SPACING * 2.0];
 
-	for &along in &along_offsets {
-		for &across in &across_offsets {
+	// Collect dot centers first
+	let mut centers = Vec::with_capacity(6);
+	for side in [-1.0_f32, 1.0] {
+		let base = side * DOT_GROUP_OFFSET;
+		for &d in &dot_offsets {
+			let offset = base + side * d;
 			let (x, y) = match axis {
-				Axis::Horizontal => (cx + across, cy + along),
-				Axis::Vertical => (cx + along, cy + across),
+				Axis::Horizontal => (cx, cy + offset),
+				Axis::Vertical => (cx + offset, cy),
 			};
-			renderer.fill_quad(
-				renderer::Quad {
-					bounds: Rectangle {
-						x: x - DOT_RADIUS,
-						y: y - DOT_RADIUS,
-						width: DOT_RADIUS * 2.0,
-						height: DOT_RADIUS * 2.0,
-					},
-					border: iced::Border {
-						color: Color::TRANSPARENT,
-						width: 0.0,
-						radius: DOT_RADIUS.into(),
-					},
-					..renderer::Quad::default()
+			centers.push((x, y));
+		}
+	}
+
+	// Bottom layer (larger, glow/accent)
+	for &(x, y) in &centers {
+		renderer.fill_quad(
+			renderer::Quad {
+				bounds: Rectangle {
+					x: x - DOT_BOTTOM_RADIUS,
+					y: y - DOT_BOTTOM_RADIUS,
+					width: DOT_BOTTOM_RADIUS * 2.0,
+					height: DOT_BOTTOM_RADIUS * 2.0,
 				},
-				color,
-			);
-		}
+				border: iced::Border {
+					color: Color::TRANSPARENT,
+					width: 0.0,
+					radius: DOT_BOTTOM_RADIUS.into(),
+				},
+				..renderer::Quad::default()
+			},
+			style.dot_bottom_color,
+		);
 	}
-}
 
-fn draw_arrow<Renderer>(
-	renderer: &mut Renderer,
-	zone: Rectangle,
-	axis: Axis,
-	collapse: CollapseState,
-	is_first: bool,
-	color: Color,
-) where
-	Renderer: renderer::Renderer,
-{
-	let pointing_inward = match (is_first, collapse) {
-		(true, CollapseState::FirstCollapsed) => false,
-		(true, _) => true,
-		(false, CollapseState::SecondCollapsed) => false,
-		(false, _) => true,
-	};
-
-	let cx = zone.x + zone.width / 2.0;
-	let cy = zone.y + zone.height / 2.0;
-	let half = ARROW_SIZE / 2.0;
-
-	match (axis, is_first) {
-		(Axis::Horizontal, true) => {
-			let dir = if pointing_inward { -1.0 } else { 1.0 };
-			let tip_x = cx + dir * half;
-			let base_x = cx - dir * half;
-			draw_chevron_h(renderer, tip_x, base_x, cy, half, color);
-		}
-		(Axis::Horizontal, false) => {
-			let dir = if pointing_inward { 1.0 } else { -1.0 };
-			let tip_x = cx + dir * half;
-			let base_x = cx - dir * half;
-			draw_chevron_h(renderer, tip_x, base_x, cy, half, color);
-		}
-		(Axis::Vertical, true) => {
-			let dir = if pointing_inward { -1.0 } else { 1.0 };
-			let tip_y = cy + dir * half;
-			let base_y = cy - dir * half;
-			draw_chevron_v(renderer, cx, tip_y, base_y, half, color);
-		}
-		(Axis::Vertical, false) => {
-			let dir = if pointing_inward { 1.0 } else { -1.0 };
-			let tip_y = cy + dir * half;
-			let base_y = cy - dir * half;
-			draw_chevron_v(renderer, cx, tip_y, base_y, half, color);
-		}
+	// Top layer (smaller, bright)
+	for &(x, y) in &centers {
+		renderer.fill_quad(
+			renderer::Quad {
+				bounds: Rectangle {
+					x: x - DOT_TOP_RADIUS,
+					y: y - DOT_TOP_RADIUS,
+					width: DOT_TOP_RADIUS * 2.0,
+					height: DOT_TOP_RADIUS * 2.0,
+				},
+				border: iced::Border {
+					color: Color::TRANSPARENT,
+					width: 0.0,
+					radius: DOT_TOP_RADIUS.into(),
+				},
+				..renderer::Quad::default()
+			},
+			style.dot_top_color,
+		);
 	}
-}
-
-fn draw_chevron_h<Renderer>(
-	renderer: &mut Renderer,
-	tip_x: f32,
-	base_x: f32,
-	cy: f32,
-	half_h: f32,
-	color: Color,
-) where
-	Renderer: renderer::Renderer,
-{
-	let thickness = 1.5;
-	let mid_x = (tip_x + base_x) / 2.0;
-	// Upper arm
-	renderer.fill_quad(
-		renderer::Quad {
-			bounds: Rectangle {
-				x: mid_x.min(tip_x),
-				y: cy - half_h,
-				width: (tip_x - mid_x).abs().max(thickness),
-				height: thickness,
-			},
-			..renderer::Quad::default()
-		},
-		color,
-	);
-	// Lower arm
-	renderer.fill_quad(
-		renderer::Quad {
-			bounds: Rectangle {
-				x: mid_x.min(tip_x),
-				y: cy + half_h - thickness,
-				width: (tip_x - mid_x).abs().max(thickness),
-				height: thickness,
-			},
-			..renderer::Quad::default()
-		},
-		color,
-	);
-	// Center bar
-	renderer.fill_quad(
-		renderer::Quad {
-			bounds: Rectangle {
-				x: tip_x - thickness / 2.0,
-				y: cy - half_h,
-				width: thickness,
-				height: half_h * 2.0,
-			},
-			..renderer::Quad::default()
-		},
-		color,
-	);
-}
-
-fn draw_chevron_v<Renderer>(
-	renderer: &mut Renderer,
-	cx: f32,
-	tip_y: f32,
-	base_y: f32,
-	half_w: f32,
-	color: Color,
-) where
-	Renderer: renderer::Renderer,
-{
-	let thickness = 1.5;
-	let mid_y = (tip_y + base_y) / 2.0;
-	// Left arm
-	renderer.fill_quad(
-		renderer::Quad {
-			bounds: Rectangle {
-				x: cx - half_w,
-				y: mid_y.min(tip_y),
-				width: thickness,
-				height: (tip_y - mid_y).abs().max(thickness),
-			},
-			..renderer::Quad::default()
-		},
-		color,
-	);
-	// Right arm
-	renderer.fill_quad(
-		renderer::Quad {
-			bounds: Rectangle {
-				x: cx + half_w - thickness,
-				y: mid_y.min(tip_y),
-				width: thickness,
-				height: (tip_y - mid_y).abs().max(thickness),
-			},
-			..renderer::Quad::default()
-		},
-		color,
-	);
-	// Center bar
-	renderer.fill_quad(
-		renderer::Quad {
-			bounds: Rectangle {
-				x: cx - half_w,
-				y: tip_y - thickness / 2.0,
-				width: half_w * 2.0,
-				height: thickness,
-			},
-			..renderer::Quad::default()
-		},
-		color,
-	);
 }
 
 pub fn collapsed_strip_thickness() -> f32 {

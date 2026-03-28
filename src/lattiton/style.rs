@@ -1,10 +1,12 @@
 use iced::Color;
 
 use crate::colors;
+use crate::lattiton::handle;
 
 #[derive(Debug, Clone, Copy)]
 pub struct HandleStyle {
-	pub dot_color: Color,
+	pub dot_top_color: Color,
+	pub dot_bottom_color: Color,
 	pub background: Color,
 	pub border_color: Color,
 	pub arrow_color: Color,
@@ -15,12 +17,13 @@ pub struct HandleStyle {
 impl Default for HandleStyle {
 	fn default() -> Self {
 		Self {
-			dot_color: colors::HANDLE_DOT,
+			dot_top_color: colors::HANDLE_DOT_TOP,
+			dot_bottom_color: colors::HANDLE_DOT_BOTTOM,
 			background: colors::HANDLE_BG,
 			border_color: colors::HANDLE_BORDER,
 			arrow_color: colors::HANDLE_ARROW,
 			arrow_hover_color: colors::HANDLE_ARROW_HOVER,
-			thickness: 8.0,
+			thickness: handle::STRIP_THICKNESS,
 		}
 	}
 }
@@ -42,17 +45,8 @@ impl Default for PaneStyle {
 	}
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Default, Clone, Copy)]
 pub struct Style {
 	pub handle: HandleStyle,
 	pub pane: PaneStyle,
-}
-
-impl Default for Style {
-	fn default() -> Self {
-		Self {
-			handle: HandleStyle::default(),
-			pane: PaneStyle::default(),
-		}
-	}
 }

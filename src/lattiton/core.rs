@@ -1,5 +1,6 @@
 use iced::advanced::layout::{self, Layout, Node};
 use iced::advanced::renderer;
+use iced::advanced::text;
 use iced::advanced::widget::{self, Tree, Widget};
 use iced::advanced::{Clipboard, Shell};
 use iced::mouse;
@@ -34,7 +35,7 @@ pub struct Lattiton<'a, Message, Theme = iced::Theme, Renderer = iced::Renderer>
 
 impl<'a, Message, Theme, Renderer> Lattiton<'a, Message, Theme, Renderer>
 where
-	Renderer: renderer::Renderer,
+	Renderer: renderer::Renderer + text::Renderer<Font = iced::Font>,
 {
 	pub fn new(
 		state: &'a State,
@@ -69,7 +70,7 @@ struct WidgetState {
 impl<Message, Theme, Renderer> Widget<Message, Theme, Renderer>
 	for Lattiton<'_, Message, Theme, Renderer>
 where
-	Renderer: renderer::Renderer,
+	Renderer: renderer::Renderer + text::Renderer<Font = iced::Font>,
 {
 	fn size(&self) -> Size<Length> {
 		Size::new(Length::Fill, Length::Fill)
@@ -312,8 +313,8 @@ where
 				}
 				if zone.contains(pos) {
 					return match zone.axis {
-						Axis::Horizontal => mouse::Interaction::ResizingVertically,
-						Axis::Vertical => mouse::Interaction::ResizingHorizontally,
+						Axis::Horizontal => mouse::Interaction::ResizingHorizontally,
+						Axis::Vertical => mouse::Interaction::ResizingVertically,
 					};
 				}
 			}
@@ -352,7 +353,7 @@ fn layout_node<Message, Theme, Renderer>(
 	pane_bounds: &mut Vec<(PaneId, Rectangle)>,
 	children: &mut Vec<Node>,
 ) where
-	Renderer: renderer::Renderer,
+	Renderer: renderer::Renderer + text::Renderer<Font = iced::Font>,
 {
 	match node {
 		NodeId::Pane(pane) => {
@@ -552,7 +553,7 @@ impl<'a, Message, Theme, Renderer> From<Lattiton<'a, Message, Theme, Renderer>>
 where
 	Message: 'a,
 	Theme: 'a,
-	Renderer: renderer::Renderer + 'a,
+	Renderer: renderer::Renderer + text::Renderer<Font = iced::Font> + 'a,
 {
 	fn from(lattiton: Lattiton<'a, Message, Theme, Renderer>) -> Self {
 		Element::new(lattiton)
