@@ -220,11 +220,10 @@ impl State {
 	}
 
 	pub fn resize(&mut self, split_id: SplitId, ratio: f32) {
-		if let Some(split) = self.get_split_mut(split_id) {
-			if split.collapse == CollapseState::Expanded {
-				split.ratio = ratio.clamp(0.05, 0.95);
-				split.saved_ratio = split.ratio;
-			}
+		if let Some(split) = self.get_split_mut(split_id)
+		&& split.collapse == CollapseState::Expanded {
+			split.ratio = ratio.clamp(0.05, 0.95);
+			split.saved_ratio = split.ratio;
 		}
 	}
 }
