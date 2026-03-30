@@ -5,3 +5,4 @@ pub mod style;
 
 pub use self::core::{InternalMessage, Lattiton, update};
 pub use self::state::{Axis, PaneId, State};
+pub use self::style::{ChromeVisibility, Style};

@@ -4,7 +4,7 @@ use iced::advanced::text;
 use iced::advanced::widget::{self, Tree, Widget};
 use iced::advanced::{Clipboard, Shell};
 use iced::mouse;
-use iced::{Element, Event, Length, Point, Rectangle, Size};
+use iced::{Element, Event, Length, Point, Rectangle, Size, Vector};
 
 use crate::lattiton::handle::{
 	self, DragHandleZone, HandleAction, HandleZone,
@@ -14,14 +14,14 @@ use crate::lattiton::state::{
 	Axis, CollapseState, DropEdge, DropTarget, MaximizeState, NodeId, PaneId,
 	PaneDrag, SplitId, State,
 };
-use crate::lattiton::style::Style;
+use crate::lattiton::style::{ChromeVisibility, Style};
 
 const PANE_DRAG_DEADBAND: f32 = 10.0;
 
 #[derive(Debug, Clone)]
 pub enum InternalMessage {
 	DragStarted(SplitId),
-	DragMoved(Point),
+	DragMoved(SplitId, f32),
 	DragEnded,
 	CollapseFirst(SplitId),
 	CollapseSecond(SplitId),
@@ -76,6 +76,8 @@ struct WidgetState {
 	child_order: Vec<usize>,
 	hovered_arrow: Option<(SplitId, bool)>,
 	drop_target: Option<DropTarget>,
+	/// Tracks whether cursor is inside widget bounds (for OnHover redraw).
+	cursor_inside: bool,
 }
 
 impl<Message, Theme, Renderer> Widget<Message, Theme, Renderer>
@@ -187,21 +189,32 @@ where
 		viewport: &Rectangle,
 	) {
 		let widget_state = tree.state.downcast_ref::<WidgetState>();
+		let origin = layout.bounds().position();
+		let offset = Vector::new(origin.x, origin.y);
+
+		let show_chrome = match self.style.chrome {
+			ChromeVisibility::Always => true,
+			ChromeVisibility::OnHover => cursor
+				.position()
+				.is_some_and(|pos| layout.bounds().contains(pos)),
+		};
 
 		// Draw pane backgrounds
-		for &(_, bounds) in &widget_state.pane_bounds {
-			renderer.fill_quad(
-				renderer::Quad {
-					bounds,
-					border: iced::Border {
-						color: self.style.pane.border_color,
-						width: self.style.pane.border_width,
-						radius: 0.0.into(),
+		if show_chrome {
+			for &(_, bounds) in &widget_state.pane_bounds {
+				renderer.fill_quad(
+					renderer::Quad {
+						bounds: bounds + offset,
+						border: iced::Border {
+							color: self.style.pane.border_color,
+							width: self.style.pane.border_width,
+							radius: 0.0.into(),
+						},
+						..renderer::Quad::default()
 					},
-					..renderer::Quad::default()
-				},
-				self.style.pane.background,
-			);
+					self.style.pane.background,
+				);
+			}
 		}
 
 		// Draw child content
@@ -219,17 +232,29 @@ where
 			}
 		}
 
-		// Draw drag handles on panes
-		for zone in &widget_state.drag_handle_zones {
-			handle::draw_drag_handle(renderer, zone, &self.style.handle);
-		}
+		if show_chrome {
+			// Draw drag handles on panes
+			for zone in &widget_state.drag_handle_zones {
+				let offset_zone = DragHandleZone {
+					bounds: zone.bounds + offset,
+					..*zone
+				};
+				handle::draw_drag_handle(renderer, &offset_zone, &self.style.handle);
+			}
 
-		// Draw split handles on top
-		for zone in &widget_state.handle_zones {
-			let hovered = widget_state.hovered_arrow
-				.filter(|(sid, _)| *sid == zone.split_id)
-				.map(|(_, is_first)| is_first);
-			handle::draw_handle(renderer, zone, &self.style.handle, hovered);
+			// Draw split handles on top
+			for zone in &widget_state.handle_zones {
+				let offset_zone = HandleZone {
+					bounds: zone.bounds + offset,
+					first_arrow: zone.first_arrow + offset,
+					second_arrow: zone.second_arrow + offset,
+					..*zone
+				};
+				let hovered = widget_state.hovered_arrow
+					.filter(|(sid, _)| *sid == zone.split_id)
+					.map(|(_, is_first)| is_first);
+				handle::draw_handle(renderer, &offset_zone, &self.style.handle, hovered);
+			}
 		}
 
 		// Draw drop preview overlay
@@ -243,7 +268,7 @@ where
 						.iter()
 						.find(|(id, _)| *id == target.pane)
 					{
-						let overlay_bounds = drop_overlay_bounds(bounds, target.edge);
+						let overlay_bounds = drop_overlay_bounds(bounds, target.edge) + offset;
 						renderer.fill_quad(
 							renderer::Quad {
 								bounds: overlay_bounds,
@@ -292,12 +317,29 @@ where
 			}
 		}
 
+		let origin = layout.bounds().position();
+		let widget_bounds = layout.bounds();
+
+		// Track cursor inside/outside for OnHover chrome redraws
+		if let Event::Mouse(mouse::Event::CursorMoved { .. }) = event {
+			if self.style.chrome == ChromeVisibility::OnHover {
+				let inside = cursor
+					.position()
+					.is_some_and(|pos| widget_bounds.contains(pos));
+				if inside != widget_state.cursor_inside {
+					widget_state.cursor_inside = inside;
+					shell.request_redraw();
+				}
+			}
+		}
+
 		match event {
 			Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)) => {
 				if let Some(pos) = cursor.position() {
+					let local = Point::new(pos.x - origin.x, pos.y - origin.y);
 					// Check arrow clicks first
 					for zone in &widget_state.handle_zones {
-						if let Some(action) = zone.hit_test(pos) {
+						if let Some(action) = zone.hit_test(local) {
 							let msg = match action {
 								HandleAction::CollapseFirst(id) => {
 									InternalMessage::CollapseFirst(id)
@@ -315,7 +357,7 @@ where
 					}
 					// Check drag handle zones (pane drag)
 					for zone in &widget_state.drag_handle_zones {
-						if zone.contains(pos) {
+						if zone.contains(local) {
 							shell.publish((self.on_message)(
 								InternalMessage::PaneDragStarted(zone.pane, pos),
 							));
@@ -324,7 +366,7 @@ where
 					}
 					// Check split handle drag
 					for zone in &widget_state.handle_zones {
-						if zone.contains(pos) {
+						if zone.contains(local) {
 							shell.publish((self.on_message)(
 								InternalMessage::DragStarted(zone.split_id),
 							));
@@ -335,6 +377,7 @@ where
 			}
 			Event::Mouse(mouse::Event::CursorMoved { .. }) => {
 				if let Some(pos) = cursor.position() {
+					let local = Point::new(pos.x - origin.x, pos.y - origin.y);
 					// Pane drag in progress
 					if self.state.pane_dragging().is_some() {
 						shell.publish((self.on_message)(
@@ -347,8 +390,8 @@ where
 							if pane == source {
 								continue;
 							}
-							if bounds.contains(pos) {
-								let edge = compute_drop_edge(bounds, pos);
+							if bounds.contains(local) {
+								let edge = compute_drop_edge(bounds, local);
 								new_target = Some(DropTarget { pane, edge });
 								break;
 							}
@@ -357,20 +400,45 @@ where
 						return;
 					}
 					// Split drag in progress
-					if self.state.dragging().is_some() {
-						shell.publish((self.on_message)(
-							InternalMessage::DragMoved(pos),
-						));
+					if let Some(split_id) = self.state.dragging() {
+						if let Some(zone) = widget_state.handle_zones
+							.iter()
+							.find(|z| z.split_id == split_id)
+						{
+							let ht = handle_thickness(&self.style.handle);
+							let ratio = match zone.axis {
+								Axis::Horizontal => {
+									let usable = zone.parent_region.width - ht;
+									if usable > 0.0 {
+										(local.x - zone.parent_region.x - ht / 2.0) / usable
+									} else {
+										0.5
+									}
+								}
+								Axis::Vertical => {
+									let usable = zone.parent_region.height - ht;
+									if usable > 0.0 {
+										(local.y - zone.parent_region.y - ht / 2.0) / usable
+									} else {
+										0.5
+									}
+								}
+							};
+							let ratio = ratio.clamp(0.05, 0.95);
+							shell.publish((self.on_message)(
+								InternalMessage::DragMoved(split_id, ratio),
+							));
+						}
 						return;
 					}
 					// Update hover state for arrows
 					let mut new_hover = None;
 					for zone in &widget_state.handle_zones {
-						if zone.first_arrow.contains(pos) {
+						if zone.first_arrow.contains(local) {
 							new_hover = Some((zone.split_id, true));
 							break;
 						}
-						if zone.second_arrow.contains(pos) {
+						if zone.second_arrow.contains(local) {
 							new_hover = Some((zone.split_id, false));
 							break;
 						}
@@ -418,18 +486,20 @@ where
 		}
 
 		if let Some(pos) = cursor.position() {
+			let origin = layout.bounds().position();
+			let local = Point::new(pos.x - origin.x, pos.y - origin.y);
 			// Drag handle hover
 			for zone in &widget_state.drag_handle_zones {
-				if zone.contains(pos) {
+				if zone.contains(local) {
 					return mouse::Interaction::Grab;
 				}
 			}
 			// Split handle hover
 			for zone in &widget_state.handle_zones {
-				if zone.first_arrow.contains(pos) || zone.second_arrow.contains(pos) {
+				if zone.first_arrow.contains(local) || zone.second_arrow.contains(local) {
 					return mouse::Interaction::Pointer;
 				}
-				if zone.contains(pos) {
+				if zone.contains(local) {
 					return match zone.axis {
 						Axis::Horizontal => mouse::Interaction::ResizingHorizontally,
 						Axis::Vertical => mouse::Interaction::ResizingVertically,
@@ -534,6 +604,7 @@ fn layout_node<Message, Theme, Renderer>(
 					handle_region,
 					axis,
 					collapse,
+					region,
 				));
 			}
 		}
@@ -691,26 +762,13 @@ where
 
 /// Process an InternalMessage by updating the State.
 /// Call this from your app's update function.
-pub fn update(state: &mut State, message: InternalMessage, bounds: Rectangle) {
+pub fn update(state: &mut State, message: InternalMessage) {
 	match message {
 		InternalMessage::DragStarted(split_id) => {
 			state.set_dragging(Some(split_id));
 		}
-		InternalMessage::DragMoved(pos) => {
-			if let Some(split_id) = state.dragging() {
-				if let Some(split) = state.get_split(split_id) {
-					let axis = split.axis;
-					let ratio = match axis {
-						Axis::Horizontal => {
-							(pos.x - bounds.x) / bounds.width
-						}
-						Axis::Vertical => {
-							(pos.y - bounds.y) / bounds.height
-						}
-					};
-					state.resize(split_id, ratio);
-				}
-			}
+		InternalMessage::DragMoved(split_id, ratio) => {
+			state.resize(split_id, ratio);
 		}
 		InternalMessage::DragEnded => {
 			state.set_dragging(None);

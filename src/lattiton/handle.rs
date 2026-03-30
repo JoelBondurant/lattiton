@@ -33,10 +33,18 @@ pub struct HandleZone {
 	pub collapse: CollapseState,
 	pub first_arrow: Rectangle,
 	pub second_arrow: Rectangle,
+	/// The full region this split divides (needed for accurate ratio computation).
+	pub parent_region: Rectangle,
 }
 
 impl HandleZone {
-	pub fn new(split_id: SplitId, bounds: Rectangle, axis: Axis, collapse: CollapseState) -> Self {
+	pub fn new(
+		split_id: SplitId,
+		bounds: Rectangle,
+		axis: Axis,
+		collapse: CollapseState,
+		parent_region: Rectangle,
+	) -> Self {
 		let (first_arrow, second_arrow) = arrow_zones(bounds, axis);
 		Self {
 			split_id,
@@ -45,6 +53,7 @@ impl HandleZone {
 			collapse,
 			first_arrow,
 			second_arrow,
+			parent_region,
 		}
 	}
 

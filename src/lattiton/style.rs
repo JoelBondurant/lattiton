@@ -45,11 +45,19 @@ impl Default for PaneStyle {
 	}
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum ChromeVisibility {
+	#[default]
+	Always,
+	OnHover,
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct Style {
 	pub handle: HandleStyle,
 	pub pane: PaneStyle,
 	pub drop_overlay_color: Color,
+	pub chrome: ChromeVisibility,
 }
 
 impl Default for Style {
@@ -58,6 +66,7 @@ impl Default for Style {
 			handle: HandleStyle::default(),
 			pane: PaneStyle::default(),
 			drop_overlay_color: colors::DROP_OVERLAY,
+			chrome: ChromeVisibility::default(),
 		}
 	}
 }
