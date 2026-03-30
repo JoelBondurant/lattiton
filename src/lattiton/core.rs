@@ -352,6 +352,7 @@ where
 								}
 							};
 							shell.publish((self.on_message)(msg));
+							widget_state.hovered_arrow = None;
 							return;
 						}
 					}

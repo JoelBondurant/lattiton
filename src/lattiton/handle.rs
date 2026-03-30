@@ -147,12 +147,12 @@ pub fn draw_handle<Renderer>(
 	draw_dots(renderer, bounds, zone.axis, style);
 
 	// Unicode arrow glyphs
-	let first_color = if hovered_arrow == Some(true) {
+	let first_color = if hovered_arrow == Some(true) || zone.collapse == CollapseState::FirstCollapsed {
 		style.arrow_hover_color
 	} else {
 		style.arrow_color
 	};
-	let second_color = if hovered_arrow == Some(false) {
+	let second_color = if hovered_arrow == Some(false) || zone.collapse == CollapseState::SecondCollapsed {
 		style.arrow_hover_color
 	} else {
 		style.arrow_color
