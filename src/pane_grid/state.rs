@@ -77,6 +77,21 @@ pub struct DropTarget {
 }
 
 #[derive(Debug, Clone)]
+pub enum Action {
+	DragStarted(SplitId),
+	DragMoved(SplitId, f32),
+	DragEnded,
+	CollapseFirst(SplitId),
+	CollapseSecond(SplitId),
+	Expand(SplitId),
+	Maximize(PaneId),
+	PaneDragStarted(PaneId, Point),
+	PaneDragMoved(Point),
+	PaneDragDropped(DropTarget),
+	PaneDragCancelled,
+}
+
+#[derive(Debug, Clone)]
 pub struct State {
 	panes: Vec<PaneId>,
 	splits: Vec<(SplitId, Split)>,
@@ -331,5 +346,76 @@ impl State {
 		};
 		let split_id = self.alloc_split(split);
 		self.replace_node(target_node, NodeId::Split(split_id));
+	}
+
+	pub fn apply(&mut self, action: Action) {
+		match action {
+			Action::DragStarted(split_id) => {
+				self.set_dragging(Some(split_id));
+			}
+			Action::DragMoved(split_id, ratio) => {
+				self.resize(split_id, ratio);
+			}
+			Action::DragEnded => {
+				self.set_dragging(None);
+			}
+			Action::CollapseFirst(split_id) => {
+				self.collapse_first(split_id);
+			}
+			Action::CollapseSecond(split_id) => {
+				self.collapse_second(split_id);
+			}
+			Action::Expand(split_id) => {
+				self.expand(split_id);
+			}
+			Action::Maximize(pane) => {
+				self.toggle_maximize(pane);
+			}
+			Action::PaneDragStarted(pane, origin) => {
+				self.set_pane_dragging(PaneDrag {
+					pane,
+					origin,
+					current: origin,
+				});
+			}
+			Action::PaneDragMoved(pos) => {
+				self.update_pane_drag_position(pos);
+			}
+			Action::PaneDragDropped(target) => {
+				if let Some(drag) = self.pane_dragging() {
+					let source = drag.pane;
+					let dest = target.pane;
+					match target.edge {
+						DropEdge::Center => {
+							self.swap_panes(source, dest);
+						}
+						DropEdge::Left => {
+							if self.detach_pane(source) {
+								self.insert_by_split(source, dest, Axis::Horizontal, true);
+							}
+						}
+						DropEdge::Right => {
+							if self.detach_pane(source) {
+								self.insert_by_split(source, dest, Axis::Horizontal, false);
+							}
+						}
+						DropEdge::Top => {
+							if self.detach_pane(source) {
+								self.insert_by_split(source, dest, Axis::Vertical, true);
+							}
+						}
+						DropEdge::Bottom => {
+							if self.detach_pane(source) {
+								self.insert_by_split(source, dest, Axis::Vertical, false);
+							}
+						}
+					}
+				}
+				self.clear_pane_dragging();
+			}
+			Action::PaneDragCancelled => {
+				self.clear_pane_dragging();
+			}
+		}
 	}
 }

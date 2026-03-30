@@ -1,7 +1,7 @@
 mod app;
 mod colors;
 mod fonts;
-mod lattiton;
+mod pane_grid;
 
 fn main() -> iced::Result {
 	iced::application(app::boot, app::update, app::view)

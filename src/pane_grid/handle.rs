@@ -3,8 +3,8 @@ use iced::advanced::text;
 use iced::{Color, Point, Rectangle, Size};
 
 use crate::fonts::HANDLE_FONT;
-use crate::lattiton::state::{Axis, CollapseState, PaneId, SplitId};
-use crate::lattiton::style::HandleStyle;
+use crate::pane_grid::state::{Axis, CollapseState, PaneId, SplitId};
+use crate::pane_grid::style::HandleStyle;
 
 const DOT_TOP_RADIUS: f32 = 1.5;
 const DOT_BOTTOM_RADIUS: f32 = 3.0;

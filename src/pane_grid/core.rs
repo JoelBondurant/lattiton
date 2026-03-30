@@ -6,54 +6,39 @@ use iced::advanced::{Clipboard, Shell};
 use iced::mouse;
 use iced::{Element, Event, Length, Point, Rectangle, Size, Vector};
 
-use crate::lattiton::handle::{
+use crate::pane_grid::handle::{
 	self, DragHandleZone, HandleAction, HandleZone,
 	collapsed_strip_thickness, handle_thickness, PANE_DRAG_HANDLE_THICKNESS,
 };
-use crate::lattiton::state::{
-	Axis, CollapseState, DropEdge, DropTarget, MaximizeState, NodeId, PaneId,
-	PaneDrag, SplitId, State,
+use crate::pane_grid::state::{
+	Action, Axis, CollapseState, DropEdge, DropTarget, MaximizeState, NodeId,
+	PaneId, SplitId, State,
 };
-use crate::lattiton::style::{ChromeVisibility, Style};
+use crate::pane_grid::style::{ChromeVisibility, Style};
 
 const PANE_DRAG_DEADBAND: f32 = 10.0;
 
-#[derive(Debug, Clone)]
-pub enum InternalMessage {
-	DragStarted(SplitId),
-	DragMoved(SplitId, f32),
-	DragEnded,
-	CollapseFirst(SplitId),
-	CollapseSecond(SplitId),
-	Expand(SplitId),
-	Maximize(PaneId),
-	PaneDragStarted(PaneId, Point),
-	PaneDragMoved(Point),
-	PaneDragDropped(DropTarget),
-	PaneDragCancelled,
-}
-
-pub struct Lattiton<'a, Message, Theme = iced::Theme, Renderer = iced::Renderer> {
+pub struct PaneGrid<'a, Message, Theme = iced::Theme, Renderer = iced::Renderer> {
 	state: &'a State,
 	content: Vec<(PaneId, Element<'a, Message, Theme, Renderer>)>,
 	style: Style,
-	on_message: Box<dyn Fn(InternalMessage) -> Message + 'a>,
+	on_action: Box<dyn Fn(Action) -> Message + 'a>,
 }
 
-impl<'a, Message, Theme, Renderer> Lattiton<'a, Message, Theme, Renderer>
+impl<'a, Message, Theme, Renderer> PaneGrid<'a, Message, Theme, Renderer>
 where
 	Renderer: renderer::Renderer + text::Renderer<Font = iced::Font>,
 {
 	pub fn new(
 		state: &'a State,
 		content: Vec<(PaneId, Element<'a, Message, Theme, Renderer>)>,
-		on_message: impl Fn(InternalMessage) -> Message + 'a,
+		on_action: impl Fn(Action) -> Message + 'a,
 	) -> Self {
 		Self {
 			state,
 			content,
 			style: Style::default(),
-			on_message: Box::new(on_message),
+			on_action: Box::new(on_action),
 		}
 	}
 
@@ -81,7 +66,7 @@ struct WidgetState {
 }
 
 impl<Message, Theme, Renderer> Widget<Message, Theme, Renderer>
-	for Lattiton<'_, Message, Theme, Renderer>
+	for PaneGrid<'_, Message, Theme, Renderer>
 where
 	Renderer: renderer::Renderer + text::Renderer<Font = iced::Font>,
 {
@@ -342,16 +327,16 @@ where
 						if let Some(action) = zone.hit_test(local) {
 							let msg = match action {
 								HandleAction::CollapseFirst(id) => {
-									InternalMessage::CollapseFirst(id)
+									Action::CollapseFirst(id)
 								}
 								HandleAction::CollapseSecond(id) => {
-									InternalMessage::CollapseSecond(id)
+									Action::CollapseSecond(id)
 								}
 								HandleAction::Expand(id) => {
-									InternalMessage::Expand(id)
+									Action::Expand(id)
 								}
 							};
-							shell.publish((self.on_message)(msg));
+							shell.publish((self.on_action)(msg));
 							widget_state.hovered_arrow = None;
 							return;
 						}
@@ -359,8 +344,8 @@ where
 					// Check drag handle zones (pane drag)
 					for zone in &widget_state.drag_handle_zones {
 						if zone.contains(local) {
-							shell.publish((self.on_message)(
-								InternalMessage::PaneDragStarted(zone.pane, pos),
+							shell.publish((self.on_action)(
+								Action::PaneDragStarted(zone.pane, pos),
 							));
 							return;
 						}
@@ -368,8 +353,8 @@ where
 					// Check split handle drag
 					for zone in &widget_state.handle_zones {
 						if zone.contains(local) {
-							shell.publish((self.on_message)(
-								InternalMessage::DragStarted(zone.split_id),
+							shell.publish((self.on_action)(
+								Action::DragStarted(zone.split_id),
 							));
 							return;
 						}
@@ -381,8 +366,8 @@ where
 					let local = Point::new(pos.x - origin.x, pos.y - origin.y);
 					// Pane drag in progress
 					if self.state.pane_dragging().is_some() {
-						shell.publish((self.on_message)(
-							InternalMessage::PaneDragMoved(pos),
+						shell.publish((self.on_action)(
+							Action::PaneDragMoved(pos),
 						));
 						// Compute drop target
 						let source = self.state.pane_dragging().unwrap().pane;
@@ -426,8 +411,8 @@ where
 								}
 							};
 							let ratio = ratio.clamp(0.05, 0.95);
-							shell.publish((self.on_message)(
-								InternalMessage::DragMoved(split_id, ratio),
+							shell.publish((self.on_action)(
+								Action::DragMoved(split_id, ratio),
 							));
 						}
 						return;
@@ -450,18 +435,18 @@ where
 			Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)) => {
 				if self.state.pane_dragging().is_some() {
 					if let Some(target) = widget_state.drop_target.take() {
-						shell.publish((self.on_message)(
-							InternalMessage::PaneDragDropped(target),
+						shell.publish((self.on_action)(
+							Action::PaneDragDropped(target),
 						));
 					} else {
-						shell.publish((self.on_message)(
-							InternalMessage::PaneDragCancelled,
+						shell.publish((self.on_action)(
+							Action::PaneDragCancelled,
 						));
 					}
 					return;
 				}
 				if self.state.dragging().is_some() {
-					shell.publish((self.on_message)(InternalMessage::DragEnded));
+					shell.publish((self.on_action)(Action::DragEnded));
 				}
 			}
 			_ => {}
@@ -749,90 +734,18 @@ fn split_regions(
 	}
 }
 
-impl<'a, Message, Theme, Renderer> From<Lattiton<'a, Message, Theme, Renderer>>
+impl<'a, Message, Theme, Renderer> From<PaneGrid<'a, Message, Theme, Renderer>>
 	for Element<'a, Message, Theme, Renderer>
 where
 	Message: 'a,
 	Theme: 'a,
 	Renderer: renderer::Renderer + text::Renderer<Font = iced::Font> + 'a,
 {
-	fn from(lattiton: Lattiton<'a, Message, Theme, Renderer>) -> Self {
+	fn from(lattiton: PaneGrid<'a, Message, Theme, Renderer>) -> Self {
 		Element::new(lattiton)
 	}
 }
 
-/// Process an InternalMessage by updating the State.
-/// Call this from your app's update function.
-pub fn update(state: &mut State, message: InternalMessage) {
-	match message {
-		InternalMessage::DragStarted(split_id) => {
-			state.set_dragging(Some(split_id));
-		}
-		InternalMessage::DragMoved(split_id, ratio) => {
-			state.resize(split_id, ratio);
-		}
-		InternalMessage::DragEnded => {
-			state.set_dragging(None);
-		}
-		InternalMessage::CollapseFirst(split_id) => {
-			state.collapse_first(split_id);
-		}
-		InternalMessage::CollapseSecond(split_id) => {
-			state.collapse_second(split_id);
-		}
-		InternalMessage::Expand(split_id) => {
-			state.expand(split_id);
-		}
-		InternalMessage::Maximize(pane) => {
-			state.toggle_maximize(pane);
-		}
-		InternalMessage::PaneDragStarted(pane, origin) => {
-			state.set_pane_dragging(PaneDrag {
-				pane,
-				origin,
-				current: origin,
-			});
-		}
-		InternalMessage::PaneDragMoved(pos) => {
-			state.update_pane_drag_position(pos);
-		}
-		InternalMessage::PaneDragDropped(target) => {
-			if let Some(drag) = state.pane_dragging() {
-				let source = drag.pane;
-				let dest = target.pane;
-				match target.edge {
-					DropEdge::Center => {
-						state.swap_panes(source, dest);
-					}
-					DropEdge::Left => {
-						if state.detach_pane(source) {
-							state.insert_by_split(source, dest, Axis::Horizontal, true);
-						}
-					}
-					DropEdge::Right => {
-						if state.detach_pane(source) {
-							state.insert_by_split(source, dest, Axis::Horizontal, false);
-						}
-					}
-					DropEdge::Top => {
-						if state.detach_pane(source) {
-							state.insert_by_split(source, dest, Axis::Vertical, true);
-						}
-					}
-					DropEdge::Bottom => {
-						if state.detach_pane(source) {
-							state.insert_by_split(source, dest, Axis::Vertical, false);
-						}
-					}
-				}
-			}
-			state.clear_pane_dragging();
-		}
-		InternalMessage::PaneDragCancelled => {
-			state.clear_pane_dragging();
-		}
-	}
-}
 
 fn compute_drop_edge(bounds: Rectangle, pos: Point) -> DropEdge {
 	let rel_x = (pos.x - bounds.x) / bounds.width;

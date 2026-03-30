@@ -1,7 +1,7 @@
 use iced::Color;
 
 use crate::colors;
-use crate::lattiton::handle;
+use crate::pane_grid::handle;
 
 #[derive(Debug, Clone, Copy)]
 pub struct HandleStyle {

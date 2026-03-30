@@ -2,15 +2,14 @@ use iced::widget::{container, text};
 use iced::{Element, Length, Task};
 
 use crate::colors;
-use crate::lattiton::{
-	self, Axis, ChromeVisibility, InternalMessage, Lattiton, PaneId, State,
-	Style,
+use crate::pane_grid::{
+	Action, Axis, ChromeVisibility, PaneGrid, PaneId, State, Style,
 };
 
 #[derive(Debug, Clone)]
 pub enum Message {
-	Outer(InternalMessage),
-	PlotGrid(InternalMessage),
+	Outer(Action),
+	PlotGrid(Action),
 }
 
 pub struct App {
@@ -61,11 +60,11 @@ pub fn boot() -> (App, Task<Message>) {
 
 pub fn update(app: &mut App, message: Message) -> Task<Message> {
 	match message {
-		Message::Outer(msg) => {
-			lattiton::update(&mut app.state, msg);
+		Message::Outer(action) => {
+			app.state.apply(action);
 		}
-		Message::PlotGrid(msg) => {
-			lattiton::update(&mut app.plot_state, msg);
+		Message::PlotGrid(action) => {
+			app.plot_state.apply(action);
 		}
 	}
 	Task::none()
@@ -105,7 +104,7 @@ pub fn view(app: &App) -> Element<'_, Message> {
 					})
 					.collect();
 
-				Lattiton::new(&app.plot_state, plot_content, Message::PlotGrid)
+				PaneGrid::new(&app.plot_state, plot_content, Message::PlotGrid)
 					.style(plot_style)
 					.into()
 			} else {
@@ -128,5 +127,5 @@ pub fn view(app: &App) -> Element<'_, Message> {
 		})
 		.collect();
 
-	Lattiton::new(&app.state, content, Message::Outer).into()
+	PaneGrid::new(&app.state, content, Message::Outer).into()
 }
