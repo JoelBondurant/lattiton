@@ -1,4 +1,4 @@
-use iced::Size;
+use iced::{Point, Size};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct PaneId(pub usize);
@@ -54,6 +54,28 @@ pub enum MaximizeState {
 	Maximized(PaneId),
 }
 
+#[derive(Debug, Clone, Copy)]
+pub struct PaneDrag {
+	pub pane: PaneId,
+	pub origin: Point,
+	pub current: Point,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DropEdge {
+	Top,
+	Bottom,
+	Left,
+	Right,
+	Center,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct DropTarget {
+	pub pane: PaneId,
+	pub edge: DropEdge,
+}
+
 #[derive(Debug, Clone)]
 pub struct State {
 	panes: Vec<PaneId>,
@@ -63,6 +85,7 @@ pub struct State {
 	next_split_id: usize,
 	maximize: MaximizeState,
 	dragging: Option<SplitId>,
+	pane_dragging: Option<PaneDrag>,
 }
 
 impl State {
@@ -75,6 +98,7 @@ impl State {
 			next_split_id: 0,
 			maximize: MaximizeState::None,
 			dragging: None,
+			pane_dragging: None,
 		}
 	}
 
@@ -225,5 +249,87 @@ impl State {
 			split.ratio = ratio.clamp(0.05, 0.95);
 			split.saved_ratio = split.ratio;
 		}
+	}
+
+	pub fn pane_dragging(&self) -> Option<PaneDrag> {
+		self.pane_dragging
+	}
+
+	pub fn set_pane_dragging(&mut self, drag: PaneDrag) {
+		self.pane_dragging = Some(drag);
+	}
+
+	pub fn update_pane_drag_position(&mut self, pos: Point) {
+		if let Some(ref mut drag) = self.pane_dragging {
+			drag.current = pos;
+		}
+	}
+
+	pub fn clear_pane_dragging(&mut self) {
+		self.pane_dragging = None;
+	}
+
+	pub fn swap_panes(&mut self, a: PaneId, b: PaneId) {
+		let node_a = NodeId::Pane(a);
+		let node_b = NodeId::Pane(b);
+		// Use a temporary sentinel to avoid double-swap
+		// First pass: a → sentinel, b → a
+		// Second pass: sentinel → b
+		if self.root == Some(node_a) {
+			self.root = Some(node_b);
+		} else if self.root == Some(node_b) {
+			self.root = Some(node_a);
+		}
+		for (_, split) in &mut self.splits {
+			let first_is_a = split.first == node_a;
+			let first_is_b = split.first == node_b;
+			let second_is_a = split.second == node_a;
+			let second_is_b = split.second == node_b;
+			if first_is_a { split.first = node_b; }
+			else if first_is_b { split.first = node_a; }
+			if second_is_a { split.second = node_b; }
+			else if second_is_b { split.second = node_a; }
+		}
+	}
+
+	pub fn detach_pane(&mut self, pane: PaneId) -> bool {
+		let pane_node = NodeId::Pane(pane);
+		// Find parent split containing this pane
+		let found = self.splits.iter()
+			.find(|(_, s)| s.first == pane_node || s.second == pane_node)
+			.map(|(id, s)| {
+				let sibling = if s.first == pane_node { s.second } else { s.first };
+				(*id, sibling)
+			});
+		let (parent_id, sibling) = match found {
+			Some(v) => v,
+			None => return false, // pane is root or not found
+		};
+		// Replace parent split with sibling in the tree
+		let parent_node = NodeId::Split(parent_id);
+		self.replace_node(parent_node, sibling);
+		// Remove the orphaned split
+		self.splits.retain(|(id, _)| *id != parent_id);
+		true
+	}
+
+	pub fn insert_by_split(&mut self, pane: PaneId, target: PaneId, axis: Axis, before: bool) {
+		let target_node = NodeId::Pane(target);
+		let pane_node = NodeId::Pane(pane);
+		let (first, second) = if before {
+			(pane_node, target_node)
+		} else {
+			(target_node, pane_node)
+		};
+		let split = Split {
+			axis,
+			ratio: 0.5,
+			saved_ratio: 0.5,
+			collapse: CollapseState::Expanded,
+			first,
+			second,
+		};
+		let split_id = self.alloc_split(split);
+		self.replace_node(target_node, NodeId::Split(split_id));
 	}
 }

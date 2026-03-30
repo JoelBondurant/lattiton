@@ -3,7 +3,7 @@ use iced::advanced::text;
 use iced::{Color, Point, Rectangle, Size};
 
 use crate::fonts::HANDLE_FONT;
-use crate::lattiton::state::{Axis, CollapseState, SplitId};
+use crate::lattiton::state::{Axis, CollapseState, PaneId, SplitId};
 use crate::lattiton::style::HandleStyle;
 
 const DOT_TOP_RADIUS: f32 = 1.5;
@@ -15,6 +15,8 @@ const ARROW_GAP: f32 = -8.0;
 const DOT_GROUP_OFFSET: f32 = 16.0;
 const COLLAPSED_STRIP_THICKNESS: f32 = 6.0;
 pub const STRIP_THICKNESS: f32 = 7.0;
+pub const PANE_DRAG_HANDLE_THICKNESS: f32 = 18.0;
+const GRIP_DOT_SPACING: f32 = 4.0;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HandleAction {
@@ -257,6 +259,107 @@ where
 
 	// Top layer (smaller, bright)
 	for &(x, y) in &centers {
+		renderer.fill_quad(
+			renderer::Quad {
+				bounds: Rectangle {
+					x: x - DOT_TOP_RADIUS,
+					y: y - DOT_TOP_RADIUS,
+					width: DOT_TOP_RADIUS * 2.0,
+					height: DOT_TOP_RADIUS * 2.0,
+				},
+				border: iced::Border {
+					color: Color::TRANSPARENT,
+					width: 0.0,
+					radius: DOT_TOP_RADIUS.into(),
+				},
+				..renderer::Quad::default()
+			},
+			style.dot_top_color,
+		);
+	}
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct DragHandleZone {
+	pub pane: PaneId,
+	pub bounds: Rectangle,
+}
+
+impl DragHandleZone {
+	pub fn new(pane: PaneId, pane_bounds: Rectangle) -> Self {
+		Self {
+			pane,
+			bounds: Rectangle {
+				x: pane_bounds.x,
+				y: pane_bounds.y,
+				width: pane_bounds.width,
+				height: PANE_DRAG_HANDLE_THICKNESS,
+			},
+		}
+	}
+
+	pub fn contains(&self, point: Point) -> bool {
+		self.bounds.contains(point)
+	}
+}
+
+pub fn draw_drag_handle<Renderer>(
+	renderer: &mut Renderer,
+	zone: &DragHandleZone,
+	style: &HandleStyle,
+) where
+	Renderer: renderer::Renderer,
+{
+	let bounds = zone.bounds;
+
+	// Background with border matching split handles
+	renderer.fill_quad(
+		renderer::Quad {
+			bounds,
+			border: iced::Border {
+				color: style.border_color,
+				width: 0.5,
+				radius: 0.0.into(),
+			},
+			..renderer::Quad::default()
+		},
+		style.background,
+	);
+
+	// 3 horizontal grip dots centered in the bar
+	let cx = bounds.x + bounds.width / 2.0;
+	let cy = bounds.y + bounds.height / 2.0;
+
+	let offsets: [f32; 3] = [
+		-GRIP_DOT_SPACING,
+		0.0,
+		GRIP_DOT_SPACING,
+	];
+
+	for &dx in &offsets {
+		let x = cx + dx;
+		let y = cy;
+
+		// Bottom layer (glow)
+		renderer.fill_quad(
+			renderer::Quad {
+				bounds: Rectangle {
+					x: x - DOT_BOTTOM_RADIUS,
+					y: y - DOT_BOTTOM_RADIUS,
+					width: DOT_BOTTOM_RADIUS * 2.0,
+					height: DOT_BOTTOM_RADIUS * 2.0,
+				},
+				border: iced::Border {
+					color: Color::TRANSPARENT,
+					width: 0.0,
+					radius: DOT_BOTTOM_RADIUS.into(),
+				},
+				..renderer::Quad::default()
+			},
+			style.dot_bottom_color,
+		);
+
+		// Top layer (bright)
 		renderer.fill_quad(
 			renderer::Quad {
 				bounds: Rectangle {

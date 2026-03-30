@@ -45,8 +45,19 @@ impl Default for PaneStyle {
 	}
 }
 
-#[derive(Debug, Default, Clone, Copy)]
+#[derive(Debug, Clone, Copy)]
 pub struct Style {
 	pub handle: HandleStyle,
 	pub pane: PaneStyle,
+	pub drop_overlay_color: Color,
+}
+
+impl Default for Style {
+	fn default() -> Self {
+		Self {
+			handle: HandleStyle::default(),
+			pane: PaneStyle::default(),
+			drop_overlay_color: colors::DROP_OVERLAY,
+		}
+	}
 }

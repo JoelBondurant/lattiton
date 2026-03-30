@@ -7,13 +7,16 @@ use iced::mouse;
 use iced::{Element, Event, Length, Point, Rectangle, Size};
 
 use crate::lattiton::handle::{
-	self, HandleAction, HandleZone,
-	collapsed_strip_thickness, handle_thickness,
+	self, DragHandleZone, HandleAction, HandleZone,
+	collapsed_strip_thickness, handle_thickness, PANE_DRAG_HANDLE_THICKNESS,
 };
 use crate::lattiton::state::{
-	Axis, CollapseState, MaximizeState, NodeId, PaneId, SplitId, State,
+	Axis, CollapseState, DropEdge, DropTarget, MaximizeState, NodeId, PaneId,
+	PaneDrag, SplitId, State,
 };
 use crate::lattiton::style::Style;
+
+const PANE_DRAG_DEADBAND: f32 = 10.0;
 
 #[derive(Debug, Clone)]
 pub enum InternalMessage {
@@ -24,6 +27,10 @@ pub enum InternalMessage {
 	CollapseSecond(SplitId),
 	Expand(SplitId),
 	Maximize(PaneId),
+	PaneDragStarted(PaneId, Point),
+	PaneDragMoved(Point),
+	PaneDragDropped(DropTarget),
+	PaneDragCancelled,
 }
 
 pub struct Lattiton<'a, Message, Theme = iced::Theme, Renderer = iced::Renderer> {
@@ -63,8 +70,12 @@ where
 #[derive(Default)]
 struct WidgetState {
 	handle_zones: Vec<HandleZone>,
+	drag_handle_zones: Vec<DragHandleZone>,
 	pane_bounds: Vec<(PaneId, Rectangle)>,
+	/// Maps layout child index → content/tree_children index
+	child_order: Vec<usize>,
 	hovered_arrow: Option<(SplitId, bool)>,
+	drop_target: Option<DropTarget>,
 }
 
 impl<Message, Theme, Renderer> Widget<Message, Theme, Renderer>
@@ -104,19 +115,33 @@ where
 
 		// Build layout into temporary vecs, then write to widget state after
 		let mut handle_zones = Vec::new();
+		let mut drag_handle_zones = Vec::new();
 		let mut pane_bounds = Vec::new();
+		let mut child_order: Vec<usize> = Vec::new();
 
 		let children = match self.state.maximize() {
 			MaximizeState::Maximized(pane) => {
 				let mut children = Vec::new();
 				if let Some(idx) = self.find_content(pane) {
+					let full_bounds = Rectangle::new(Point::ORIGIN, size);
+					pane_bounds.push((pane, full_bounds));
+					drag_handle_zones.push(DragHandleZone::new(pane, full_bounds));
+
+					let content_bounds = Size::new(
+						size.width,
+						size.height - PANE_DRAG_HANDLE_THICKNESS,
+					);
 					let child_node = self.content[idx].1.as_widget_mut().layout(
 						&mut tree.children[idx],
 						renderer,
-						&layout::Limits::new(Size::ZERO, size),
+						&layout::Limits::new(Size::ZERO, content_bounds),
 					);
-					pane_bounds.push((pane, Rectangle::new(Point::ORIGIN, size)));
+					let child_node = child_node.move_to(Point::new(
+						0.0,
+						PANE_DRAG_HANDLE_THICKNESS,
+					));
 					children.push(child_node);
+					child_order.push(idx);
 				}
 				children
 			}
@@ -132,7 +157,9 @@ where
 						root,
 						Rectangle::new(Point::ORIGIN, size),
 						&mut handle_zones,
+						&mut drag_handle_zones,
 						&mut pane_bounds,
+						&mut child_order,
 						&mut children,
 					);
 				}
@@ -142,7 +169,9 @@ where
 
 		let widget_state = tree.state.downcast_mut::<WidgetState>();
 		widget_state.handle_zones = handle_zones;
+		widget_state.drag_handle_zones = drag_handle_zones;
 		widget_state.pane_bounds = pane_bounds;
+		widget_state.child_order = child_order;
 
 		Node::with_children(size, children)
 	}
@@ -177,9 +206,9 @@ where
 
 		// Draw child content
 		for (child_idx, child_layout) in layout.children().enumerate() {
-			if child_idx < self.content.len() {
-				self.content[child_idx].1.as_widget().draw(
-					&tree.children[child_idx],
+			if let Some(&content_idx) = widget_state.child_order.get(child_idx) {
+				self.content[content_idx].1.as_widget().draw(
+					&tree.children[content_idx],
 					renderer,
 					theme,
 					style,
@@ -190,12 +219,46 @@ where
 			}
 		}
 
-		// Draw handles on top
+		// Draw drag handles on panes
+		for zone in &widget_state.drag_handle_zones {
+			handle::draw_drag_handle(renderer, zone, &self.style.handle);
+		}
+
+		// Draw split handles on top
 		for zone in &widget_state.handle_zones {
 			let hovered = widget_state.hovered_arrow
 				.filter(|(sid, _)| *sid == zone.split_id)
 				.map(|(_, is_first)| is_first);
 			handle::draw_handle(renderer, zone, &self.style.handle, hovered);
+		}
+
+		// Draw drop preview overlay
+		if let Some(drag) = self.state.pane_dragging() {
+			let dist = ((drag.current.x - drag.origin.x).powi(2)
+				+ (drag.current.y - drag.origin.y).powi(2))
+			.sqrt();
+			if dist > PANE_DRAG_DEADBAND {
+				if let Some(target) = &widget_state.drop_target {
+					if let Some(&(_, bounds)) = widget_state.pane_bounds
+						.iter()
+						.find(|(id, _)| *id == target.pane)
+					{
+						let overlay_bounds = drop_overlay_bounds(bounds, target.edge);
+						renderer.fill_quad(
+							renderer::Quad {
+								bounds: overlay_bounds,
+								border: iced::Border {
+									color: self.style.handle.border_color,
+									width: 1.0,
+									radius: 0.0.into(),
+								},
+								..renderer::Quad::default()
+							},
+							self.style.drop_overlay_color,
+						);
+					}
+				}
+			}
 		}
 	}
 
@@ -213,10 +276,11 @@ where
 		let widget_state = tree.state.downcast_mut::<WidgetState>();
 
 		// Forward events to children first
+		let child_order = widget_state.child_order.clone();
 		for (child_idx, child_layout) in layout.children().enumerate() {
-			if child_idx < self.content.len() {
-				self.content[child_idx].1.as_widget_mut().update(
-					&mut tree.children[child_idx],
+			if let Some(&content_idx) = child_order.get(child_idx) {
+				self.content[content_idx].1.as_widget_mut().update(
+					&mut tree.children[content_idx],
 					event,
 					child_layout,
 					cursor,
@@ -249,7 +313,16 @@ where
 							return;
 						}
 					}
-					// Check handle drag
+					// Check drag handle zones (pane drag)
+					for zone in &widget_state.drag_handle_zones {
+						if zone.contains(pos) {
+							shell.publish((self.on_message)(
+								InternalMessage::PaneDragStarted(zone.pane, pos),
+							));
+							return;
+						}
+					}
+					// Check split handle drag
 					for zone in &widget_state.handle_zones {
 						if zone.contains(pos) {
 							shell.publish((self.on_message)(
@@ -262,6 +335,28 @@ where
 			}
 			Event::Mouse(mouse::Event::CursorMoved { .. }) => {
 				if let Some(pos) = cursor.position() {
+					// Pane drag in progress
+					if self.state.pane_dragging().is_some() {
+						shell.publish((self.on_message)(
+							InternalMessage::PaneDragMoved(pos),
+						));
+						// Compute drop target
+						let source = self.state.pane_dragging().unwrap().pane;
+						let mut new_target = None;
+						for &(pane, bounds) in &widget_state.pane_bounds {
+							if pane == source {
+								continue;
+							}
+							if bounds.contains(pos) {
+								let edge = compute_drop_edge(bounds, pos);
+								new_target = Some(DropTarget { pane, edge });
+								break;
+							}
+						}
+						widget_state.drop_target = new_target;
+						return;
+					}
+					// Split drag in progress
 					if self.state.dragging().is_some() {
 						shell.publish((self.on_message)(
 							InternalMessage::DragMoved(pos),
@@ -284,6 +379,18 @@ where
 				}
 			}
 			Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)) => {
+				if self.state.pane_dragging().is_some() {
+					if let Some(target) = widget_state.drop_target.take() {
+						shell.publish((self.on_message)(
+							InternalMessage::PaneDragDropped(target),
+						));
+					} else {
+						shell.publish((self.on_message)(
+							InternalMessage::PaneDragCancelled,
+						));
+					}
+					return;
+				}
 				if self.state.dragging().is_some() {
 					shell.publish((self.on_message)(InternalMessage::DragEnded));
 				}
@@ -302,11 +409,22 @@ where
 	) -> mouse::Interaction {
 		let widget_state = tree.state.downcast_ref::<WidgetState>();
 
+		if self.state.pane_dragging().is_some() {
+			return mouse::Interaction::Grabbing;
+		}
+
 		if self.state.dragging().is_some() {
 			return mouse::Interaction::Grabbing;
 		}
 
 		if let Some(pos) = cursor.position() {
+			// Drag handle hover
+			for zone in &widget_state.drag_handle_zones {
+				if zone.contains(pos) {
+					return mouse::Interaction::Grab;
+				}
+			}
+			// Split handle hover
 			for zone in &widget_state.handle_zones {
 				if zone.first_arrow.contains(pos) || zone.second_arrow.contains(pos) {
 					return mouse::Interaction::Pointer;
@@ -322,9 +440,9 @@ where
 
 		// Check children
 		for (child_idx, child_layout) in layout.children().enumerate() {
-			if child_idx < self.content.len() {
-				let interaction = self.content[child_idx].1.as_widget().mouse_interaction(
-					&tree.children[child_idx],
+			if let Some(&content_idx) = widget_state.child_order.get(child_idx) {
+				let interaction = self.content[content_idx].1.as_widget().mouse_interaction(
+					&tree.children[content_idx],
 					child_layout,
 					cursor,
 					viewport,
@@ -350,7 +468,9 @@ fn layout_node<Message, Theme, Renderer>(
 	node: NodeId,
 	region: Rectangle,
 	handle_zones: &mut Vec<HandleZone>,
+	drag_handle_zones: &mut Vec<DragHandleZone>,
 	pane_bounds: &mut Vec<(PaneId, Rectangle)>,
+	child_order: &mut Vec<usize>,
 	children: &mut Vec<Node>,
 ) where
 	Renderer: renderer::Renderer + text::Renderer<Font = iced::Font>,
@@ -359,18 +479,25 @@ fn layout_node<Message, Theme, Renderer>(
 		NodeId::Pane(pane) => {
 			let idx = content.iter().position(|(id, _)| *id == pane);
 			if let Some(idx) = idx {
+				pane_bounds.push((pane, region));
+				drag_handle_zones.push(DragHandleZone::new(pane, region));
+
+				let content_height = (region.height - PANE_DRAG_HANDLE_THICKNESS).max(0.0);
 				let limits = layout::Limits::new(
 					Size::ZERO,
-					Size::new(region.width, region.height),
+					Size::new(region.width, content_height),
 				);
 				let child_node = content[idx].1.as_widget_mut().layout(
 					&mut tree_children[idx],
 					renderer,
 					&limits,
 				);
-				let child_node = child_node.move_to(Point::new(region.x, region.y));
+				let child_node = child_node.move_to(Point::new(
+					region.x,
+					region.y + PANE_DRAG_HANDLE_THICKNESS,
+				));
+				child_order.push(idx);
 				children.push(child_node);
-				pane_bounds.push((pane, region));
 			}
 		}
 		NodeId::Split(split_id) => {
@@ -389,14 +516,16 @@ fn layout_node<Message, Theme, Renderer>(
 				if collapse != CollapseState::FirstCollapsed {
 					layout_node(
 						content, state, style, tree_children, renderer,
-						first, first_region, handle_zones, pane_bounds, children,
+						first, first_region, handle_zones, drag_handle_zones,
+						pane_bounds, child_order, children,
 					);
 				}
 
 				if collapse != CollapseState::SecondCollapsed {
 					layout_node(
 						content, state, style, tree_children, renderer,
-						second, second_region, handle_zones, pane_bounds, children,
+						second, second_region, handle_zones, drag_handle_zones,
+						pane_bounds, child_order, children,
 					);
 				}
 
@@ -598,5 +727,107 @@ pub fn update(state: &mut State, message: InternalMessage, bounds: Rectangle) {
 		InternalMessage::Maximize(pane) => {
 			state.toggle_maximize(pane);
 		}
+		InternalMessage::PaneDragStarted(pane, origin) => {
+			state.set_pane_dragging(PaneDrag {
+				pane,
+				origin,
+				current: origin,
+			});
+		}
+		InternalMessage::PaneDragMoved(pos) => {
+			state.update_pane_drag_position(pos);
+		}
+		InternalMessage::PaneDragDropped(target) => {
+			if let Some(drag) = state.pane_dragging() {
+				let source = drag.pane;
+				let dest = target.pane;
+				match target.edge {
+					DropEdge::Center => {
+						state.swap_panes(source, dest);
+					}
+					DropEdge::Left => {
+						if state.detach_pane(source) {
+							state.insert_by_split(source, dest, Axis::Horizontal, true);
+						}
+					}
+					DropEdge::Right => {
+						if state.detach_pane(source) {
+							state.insert_by_split(source, dest, Axis::Horizontal, false);
+						}
+					}
+					DropEdge::Top => {
+						if state.detach_pane(source) {
+							state.insert_by_split(source, dest, Axis::Vertical, true);
+						}
+					}
+					DropEdge::Bottom => {
+						if state.detach_pane(source) {
+							state.insert_by_split(source, dest, Axis::Vertical, false);
+						}
+					}
+				}
+			}
+			state.clear_pane_dragging();
+		}
+		InternalMessage::PaneDragCancelled => {
+			state.clear_pane_dragging();
+		}
+	}
+}
+
+fn compute_drop_edge(bounds: Rectangle, pos: Point) -> DropEdge {
+	let rel_x = (pos.x - bounds.x) / bounds.width;
+	let rel_y = (pos.y - bounds.y) / bounds.height;
+
+	// Center 40% zone = swap
+	if rel_x > 0.3 && rel_x < 0.7 && rel_y > 0.3 && rel_y < 0.7 {
+		return DropEdge::Center;
+	}
+
+	// Closest edge wins
+	let dist_left = rel_x;
+	let dist_right = 1.0 - rel_x;
+	let dist_top = rel_y;
+	let dist_bottom = 1.0 - rel_y;
+
+	let min = dist_left.min(dist_right).min(dist_top).min(dist_bottom);
+	if min == dist_left {
+		DropEdge::Left
+	} else if min == dist_right {
+		DropEdge::Right
+	} else if min == dist_top {
+		DropEdge::Top
+	} else {
+		DropEdge::Bottom
+	}
+}
+
+fn drop_overlay_bounds(bounds: Rectangle, edge: DropEdge) -> Rectangle {
+	match edge {
+		DropEdge::Center => bounds,
+		DropEdge::Left => Rectangle {
+			x: bounds.x,
+			y: bounds.y,
+			width: bounds.width / 2.0,
+			height: bounds.height,
+		},
+		DropEdge::Right => Rectangle {
+			x: bounds.x + bounds.width / 2.0,
+			y: bounds.y,
+			width: bounds.width / 2.0,
+			height: bounds.height,
+		},
+		DropEdge::Top => Rectangle {
+			x: bounds.x,
+			y: bounds.y,
+			width: bounds.width,
+			height: bounds.height / 2.0,
+		},
+		DropEdge::Bottom => Rectangle {
+			x: bounds.x,
+			y: bounds.y + bounds.height / 2.0,
+			width: bounds.width,
+			height: bounds.height / 2.0,
+		},
 	}
 }

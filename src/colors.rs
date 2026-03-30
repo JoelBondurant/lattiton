@@ -11,6 +11,8 @@ pub const HANDLE_ARROW_HOVER: Color = rgb(150, 255, 250);
 pub const HANDLE_DOT_TOP: Color = rgb(150, 4, 250);
 pub const HANDLE_DOT_BOTTOM: Color = rgb(0, 0, 0);
 
+pub const DROP_OVERLAY: Color = rgba(60, 8, 100, 0.25);
+
 const fn rgb(r: u8, g: u8, b: u8) -> Color {
 	Color::from_rgb8(r, g, b)
 }
